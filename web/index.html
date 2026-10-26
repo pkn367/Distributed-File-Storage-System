@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Distributed File Storage</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1b2230; --muted: #667085; --line: #e2e5ea;
+    --accent: #2457d6; --accent-text: #ffffff; --soft: #eaf0ff; --ok: #137a3a; --bad: #b42318; --warn: #9a6700;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e131d; --card: #161d2b; --text: #e8ecf4; --muted: #98a2b3; --line: #29324a;
+      --accent: #6b9bff; --accent-text: #0e131d; --soft: #1c2845; --ok: #4ade80; --bad: #f97066; --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 24px 16px 48px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
+  h1 { font-size: 24px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  h2 { font-size: 16px; margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .sub { margin: 0; color: var(--muted); font-size: 14px; }
+  .pill { padding: 4px 12px; border-radius: 999px; font-size: 13px; border: 1px solid var(--line); background: var(--card); color: var(--muted); white-space: nowrap; }
+  .pill.on { color: var(--ok); border-color: var(--ok); }
+  .pill.off { color: var(--bad); border-color: var(--bad); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px; text-align: center; cursor: pointer; color: var(--muted); transition: background .15s, border-color .15s; }
+  .drop:hover, .drop.over { background: var(--soft); border-color: var(--accent); }
+  .drop strong { color: var(--text); }
+  .drop small { display: block; margin-top: 6px; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--text); padding: 6px 12px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--bad); }
+  .tools { display: flex; align-items: center; gap: 12px; font-weight: 400; }
+  label.auto { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.actions { text-align: right; white-space: nowrap; }
+  td.actions a { color: var(--accent); margin-right: 12px; text-decoration: none; }
+  td.actions a:hover { text-decoration: underline; }
+  .empty { color: var(--muted); margin: 8px 0 0; }
+  .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 14px; }
+  .controls label { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); gap: 4px; }
+  .controls input { width: 90px; font: inherit; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  ul.transfers { list-style: none; margin: 0; padding: 0; }
+  ul.transfers li { display: grid; grid-template-columns: minmax(120px, 2fr) 80px minmax(80px, 3fr) minmax(90px, 1.5fr); gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  ul.transfers progress { width: 100%; height: 8px; accent-color: var(--accent); }
+  .t-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .t-size { color: var(--muted); text-align: right; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); }
+  #log { max-height: 220px; overflow-y: auto; font: 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--bg); border-radius: 8px; padding: 10px 12px; }
+  @media (max-width: 560px) { ul.transfers li { grid-template-columns: 1fr 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Distributed File Storage</h1>
+      <p class="sub">Browser &rarr; C++ web gateway &rarr; multi-threaded storage server (per-file locks)</p>
+    </div>
+    <span id="status" class="pill">checking&hellip;</span>
+  </header>
+
+  <section class="card">
+    <h2>Upload files</h2>
+    <label class="drop" id="drop" for="picker">
+      <strong>Drop files here</strong> or click to choose
+      <small>All selected files upload at the same time &middot; letters, digits, . _ - in names &middot; max 100 MB each</small>
+    </label>
+    <input type="file" id="picker" multiple hidden>
+  </section>
+
+  <section class="card">
+    <h2>Stored files
+      <span class="tools">
+        <label class="auto"><input type="checkbox" id="auto"> Auto-refresh</label>
+        <button id="refresh" type="button">Refresh</button>
+      </span>
+    </h2>
+    <table id="files" hidden>
+      <thead><tr><th>Name</th><th class="num">Size</th><th></th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="empty" id="empty">No files stored yet.</p>
+  </section>
+
+  <section class="card">
+    <h2>Concurrency demo</h2>
+    <div class="controls">
+      <label>Simulated clients <input id="load-n" type="number" min="1" max="20" value="8"></label>
+      <label>Size each (KB) <input id="load-kb" type="number" min="1" max="20480" value="512"></label>
+      <button id="run-load" class="primary" type="button">Run concurrent upload test</button>
+      <button id="run-conflict" type="button">Same-file conflict test</button>
+      <button id="cleanup" class="danger" type="button">Delete demo files</button>
+    </div>
+    <p class="hint"><b>Concurrent upload test:</b> every simulated client uploads its own random file at the same moment.
+      <b>Conflict test:</b> 8 clients write <i>different</i> contents to the <i>same</i> file (conflict.txt) simultaneously;
+      afterwards the page downloads it and checks it was written completely by one client and never mixed.
+      Browsers allow about 6 parallel connections per site, so larger tests run in waves &mdash; open a second tab or use the
+      command-line client for more simultaneous clients.</p>
+  </section>
+
+  <section class="card">
+    <h2>Transfers</h2>
+    <ul class="transfers" id="transfers"></ul>
+    <p class="empty" id="no-transfers">Nothing uploaded yet in this tab.</p>
+  </section>
+
+  <section class="card">
+    <h2>Activity log</h2>
+    <div id="log" aria-live="polite"></div>
+  </section>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const MAX_BYTES = 100 * 1024 * 1024;
+  const $ = id => document.getElementById(id);
+
+  function fmtBytes(n) {
+    if (n < 1024) return n + ' B';
+    const units = ['KB', 'MB', 'GB'];
+    let i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < units.length - 1);
+    return n.toFixed(n < 10 ? 2 : 1) + ' ' + units[i];
+  }
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+  function log(msg, kind) {
+    const box = $('log');
+    const line = document.createElement('div');
+    if (kind) line.className = kind;
+    line.textContent = '[' + new Date().toLocaleTimeString() + '] ' + msg;
+    box.appendChild(line);
+    box.scrollTop = box.scrollHeight;
+  }
+
+  // Server accepts only letters, digits, '.', '_' and '-' (no spaces, no '/').
+  function safeName(raw) {
+    let n = raw.replace(/[^A-Za-z0-9._-]/g, '_').replace(/^\.+/, '_');
+    if (n.length > 100) n = n.slice(0, 100);
+    return n || 'file';
+  }
+
+  function setStatus(online, detail) {
+    const pill = $('status');
+    pill.className = 'pill ' + (online ? 'on' : 'off');
+    pill.textContent = online ? 'Storage server online' : 'Storage server unreachable';
+    pill.title = detail || '';
+  }
+
+  // ---- stored files table -------------------------------------------------
+  function render(files) {
+    const body = $('files').querySelector('tbody');
+    body.textContent = '';
+    $('files').hidden = files.length === 0;
+    $('empty').hidden = files.length !== 0;
+    for (const f of files) {
+      const tr = document.createElement('tr');
+      const name = document.createElement('td'); name.textContent = f.name;
+      const size = document.createElement('td'); size.className = 'num'; size.textContent = fmtBytes(f.size);
+      const act = document.createElement('td'); act.className = 'actions';
+      const dl = document.createElement('a'); dl.textContent = 'Download';
+      dl.href = '/api/files/' + encodeURIComponent(f.name); dl.setAttribute('download', f.name);
+      const del = document.createElement('button'); del.type = 'button'; del.className = 'danger'; del.textContent = 'Delete';
+      del.addEventListener('click', () => deleteFile(f.name));
+      act.append(dl, del);
+      tr.append(name, size, act);
+      body.appendChild(tr);
+    }
+  }
+
+  async function refresh() {
+    try {
+      const resp = await fetch('/api/files');
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || 'request failed');
+      render(data.files);
+      setStatus(true);
+    } catch (e) {
+      setStatus(false, String(e.message || e));
+    }
+  }
+
+  async function deleteFile(name, quiet) {
+    try {
+      const resp = await fetch('/api/files/' + encodeURIComponent(name), { method: 'DELETE' });
+      const data = await resp.json();
+      if (data.ok) { if (!quiet) log('Deleted ' + name, 'ok'); }
+      else log('Delete ' + name + ' failed: ' + data.error, 'bad');
+    } catch (e) { log('Delete ' + name + ' failed: ' + e, 'bad'); }
+    if (!quiet) refresh();
+  }
+
+  // ---- transfers list -----------------------------------------------------
+  function addTransfer(label, size) {
+    $('no-transfers').hidden = true;
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="t-name"></span><span class="t-size"></span><progress max="100" value="0"></progress><span class="t-status">queued</span>';
+    li.querySelector('.t-name').textContent = label;
+    li.querySelector('.t-name').title = label;
+    li.querySelector('.t-size').textContent = fmtBytes(size);
+    $('transfers').prepend(li);
+    const bar = li.querySelector('progress');
+    const status = li.querySelector('.t-status');
+    return {
+      progress: pct => { bar.value = pct; },
+      status: (text, kind) => { status.textContent = text; status.className = 't-status ' + (kind || ''); }
+    };
+  }
+
+  // XMLHttpRequest (not fetch) because it reports upload progress.
+  function uploadBlob(blob, name, label) {
+    return new Promise(resolve => {
+      const row = addTransfer(label || name, blob.size);
+      const t0 = performance.now();
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', '/api/files/' + encodeURIComponent(name));
+      row.status('uploading');
+      xhr.upload.onprogress = e => { if (e.lengthComputable) row.progress(100 * e.loaded / e.total); };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (_) {}
+        const ms = Math.round(performance.now() - t0);
+        if (xhr.status >= 200 && xhr.status < 300 && data.ok) {
+          row.progress(100); row.status('done in ' + ms + ' ms', 'ok');
+          log('Uploaded ' + name + ' (' + fmtBytes(blob.size) + ') in ' + ms + ' ms', 'ok');
+          resolve({ ok: true, ms });
+        } else {
+          const why = data.error || ('HTTP ' + xhr.status);
+          row.status('failed', 'bad');
+          log('Upload of ' + name + ' failed: ' + why, 'bad');
+          resolve({ ok: false, error: why });
+        }
+      };
+      xhr.onerror = () => {
+        row.status('network error', 'bad');
+        log('Upload of ' + name + ' failed: network error', 'bad');
+        resolve({ ok: false, error: 'network error' });
+      };
+      xhr.send(blob);
+    });
+  }
+
+  async function uploadFiles(fileList) {
+    const files = Array.from(fileList);
+    if (!files.length) return;
+    log('Starting ' + files.length + ' upload(s) at the same time');
+    await Promise.all(files.map(f => {
+      if (f.size > MAX_BYTES) { log(f.name + ' is larger than 100 MB, skipped', 'bad'); return Promise.resolve(); }
+      const name = safeName(f.name);
+      if (name !== f.name) log('Renamed "' + f.name + '" to "' + name + '" (allowed: letters, digits, . _ -)', 'warn');
+      return uploadBlob(f, name);
+    }));
+    refresh();
+  }
+
+  // ---- drag & drop / picker ----------------------------------------------
+  const drop = $('drop');
+  ['dragenter', 'dragover'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+  drop.addEventListener('drop', e => uploadFiles(e.dataTransfer.files));
+  $('picker').addEventListener('change', e => { uploadFiles(e.target.files); e.target.value = ''; });
+  $('refresh').addEventListener('click', refresh);
+
+  // ---- concurrency demos --------------------------------------------------
+  function randomBlob(bytes) {
+    const parts = [];
+    for (let left = bytes; left > 0; left -= 65536) {
+      const chunk = new Uint8Array(Math.min(left, 65536));
+      crypto.getRandomValues(chunk);
+      parts.push(chunk);
+    }
+    return new Blob(parts);
+  }
+
+  $('run-load').addEventListener('click', async () => {
+    const n = clamp(parseInt($('load-n').value, 10) || 8, 1, 20);
+    const kb = clamp(parseInt($('load-kb').value, 10) || 512, 1, 20480);
+    const btn = $('run-load'); btn.disabled = true;
+    log('Load test: ' + n + ' simulated clients, ' + kb + ' KB each, all started together');
+    const t0 = performance.now();
+    const results = await Promise.all(Array.from({ length: n }, (_, i) =>
+      uploadBlob(randomBlob(kb * 1024), 'load-test-' + (i + 1) + '.bin', 'client ' + (i + 1) + ': load-test-' + (i + 1) + '.bin')));
+    const okCount = results.filter(r => r.ok).length;
+    log('Load test finished: ' + okCount + '/' + n + ' uploads succeeded in ' + Math.round(performance.now() - t0) + ' ms',
+        okCount === n ? 'ok' : 'bad');
+    btn.disabled = false;
+    refresh();
+  });
+
+  $('run-conflict').addEventListener('click', async () => {
+    const n = 8, size = 2 * 1024 * 1024, btn = $('run-conflict'); btn.disabled = true;
+    log('Conflict test: ' + n + ' clients write DIFFERENT content to the SAME file (conflict.txt) at once');
+    const letter = i => String.fromCharCode(65 + i);
+    await Promise.all(Array.from({ length: n }, (_, i) =>
+      uploadBlob(new Blob([letter(i).repeat(size)]), 'conflict.txt', 'client ' + letter(i) + ': conflict.txt')));
+    try {
+      const resp = await fetch('/api/files/conflict.txt');
+      const bytes = new Uint8Array(await resp.arrayBuffer());
+      let uniform = bytes.length === size;
+      for (let i = 1; uniform && i < bytes.length; i++) if (bytes[i] !== bytes[0]) uniform = false;
+      if (uniform) log('PASS: conflict.txt is intact (' + fmtBytes(bytes.length) + ', written completely by client ' +
+                       String.fromCharCode(bytes[0]) + '). No mixed or partial content.', 'ok');
+      else log('FAIL: conflict.txt contains mixed or incomplete data', 'bad');
+    } catch (e) { log('Conflict test could not read the file back: ' + e, 'bad'); }
+    btn.disabled = false;
+    refresh();
+  });
+
+  $('cleanup').addEventListener('click', async () => {
+    const resp = await fetch('/api/files');
+    const data = await resp.json();
+    const demo = (data.files || []).filter(f => /^load-test-\d+\.bin$/.test(f.name) || f.name === 'conflict.txt');
+    await Promise.all(demo.map(f => deleteFile(f.name, true)));
+    log('Deleted ' + demo.length + ' demo file(s)', 'ok');
+    refresh();
+  });
+
+  log('Page loaded. Pick files above, or run a concurrency demo.');
+  refresh();
+  // Auto-refresh is OFF by default: every refresh is one real connection to the storage server,
+  // and polling would fill the server log with LIST lines. Turn it on to watch uploads made by
+  // other tabs or by the command-line client appear live.
+  let timer = null;
+  $('auto').addEventListener('change', e => {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (e.target.checked) { timer = setInterval(refresh, 5000); log('Auto-refresh on (every 5 s)'); }
+    else log('Auto-refresh off');
+  });
+})();
+</script>
+</body>
+</html>
